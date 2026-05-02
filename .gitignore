@@ -1,5 +1,6 @@
 .env
 wandb/*
+artifacts/
 data/*
 __pycache__/*
 src/__pycache__/*
