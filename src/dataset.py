@@ -43,8 +43,9 @@ class LJSpeechDataset(Dataset):
         
         # 1. Load Audio (Pake Utils bersih)
         waveform, sr = load_audio_wav(wav_path)
-        if waveform is None: # Fallback kalau error
-            return self.__getitem__(0)
+        if waveform is None:
+            # skip corrupted file, try next index (wraps around)
+            return self.__getitem__((idx + 1) % len(self))
 
         # 2. Resample on demand
         if sr != HParams.SAMPLE_RATE:
