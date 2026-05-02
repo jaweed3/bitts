@@ -5,7 +5,8 @@ import soundfile as sf
 from hparams import HParams
 from models import BitJETS
 from vocoder import Vocoder
-from dataset import text_to_sequence # Pastikan ini ada
+from dataset import text_to_sequence
+from packing import unpack_state_dict
 
 def main(args):
     checkpoint_path = args.model_path
@@ -26,9 +27,12 @@ def main(args):
     # Load Weights
     print(f"🔍 Inspecting checkpoint keys...")
     checkpoint = torch.load(checkpoint_path, map_location=HParams.DEVICE)
-    
-    # [FIX] Cek apakah ini dictionary lengkap (Training Checkpoint) atau cuma bobot (Inference Model)
-    if 'model_state_dict' in checkpoint:
+
+    # Handle packed checkpoint (has __packed_keys__), training checkpoint, or raw weights
+    if "__packed_keys__" in checkpoint:
+        print("📦 Packed checkpoint detected. Unpacking...")
+        state_dict = unpack_state_dict(checkpoint)
+    elif 'model_state_dict' in checkpoint:
         print("✅ Found 'model_state_dict' key. Extracting weights...")
         state_dict = checkpoint['model_state_dict']
     else:
