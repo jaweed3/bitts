@@ -6,23 +6,22 @@ from torch.nn.modules import padding
 # layer norm untuk menerima input x
 def activation_quant(x):
     """
-    Activation path
+    Activation quantization per paper Eq. 7-8.
+    γ = ||x||∞  (global infinity norm = single max absolute value across entire tensor)
+    x' = Clip(x * Qp/γ, -Qp+ε, Qp-ε)
+    Returns quantized x and scale (Qp/γ) for rescaling the output.
     """
-    # gamma => absmax in each channel
-    gamma = x.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-5)
+    # γ = global absmax of the entire tensor (Eq. 8)
+    gamma = x.abs().max().clamp(min=1e-5)
 
-    # Scaling and clipping => Q_p = 127 (8-bit int)
     Q_p = 127.0
     scale = Q_p / gamma
 
-    # forward: rounding (diskrit)
-    # backward: identity ()
     x_scaled = x * scale
+    # STE: forward uses rounded+clipped, backward flows through unrounded
     x_rounded = x_scaled.round().clamp(-Q_p, Q_p)
-
     x_quant = (x_rounded - x_scaled).detach() + x_scaled
 
-    # x_quant untuk conv dan scale untuk gamma
     return x_quant, scale
 
 def weight_quant(w):
@@ -52,10 +51,9 @@ class BitConv1d(nn.Conv1d):
         self.bias = None
 
     def forward(self, x):
-        # 1. Preprocessing
-        # TODO: Make LayerNorm class!
+        # Pre-normalization is handled by BitConvBlock before input reaches here.
+        # x: [batch, channels, time] (Conv1d format)
 
-        # 2. Quantization activation
         x_quant, scale_x = activation_quant(x)
 
         # weight quantization, w_quant ==> ternary weight {-1, 0, 1}
