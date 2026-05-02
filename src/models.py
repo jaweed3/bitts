@@ -12,7 +12,7 @@ class VarianceAdaptor(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout),
 
-            # context underxtanding
+            # context understanding
             BitConvBlock(hidden_dim, hidden_dim, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Dropout(dropout),
@@ -21,25 +21,27 @@ class VarianceAdaptor(nn.Module):
             nn.Linear(hidden_dim, 1)
         )
 
-    def forward(self, x, target_durations=None, duration_control=0.1):
+    def forward(self, x, target_durations=None, duration_control=1.0, src_mask=None):
         """
-        x => encoder output [batch, text_len, hidden_dim
-        target_duration: Real duration (ground truth) [batch, text_len] -> used when training
-        duration_control: for managing speaking speed when inference (1.0=normal, 0.8=fast)
-        duration prediction => log scale (because duration is always positive so we use log)
+        x => encoder output [batch, text_len, hidden_dim]
+        target_durations: ground truth durations [batch, text_len] (training only)
+        duration_control: speaking speed multiplier (1.0=normal)
+        src_mask: boolean mask [batch, text_len], True=real token, False=padding
         """
 
         log_duration_prediction = self.duration_predictor(x).squeeze(-1)
 
         if target_durations is not None:
-            # training mode, use real duration(raw)
+            # training: use real durations (padding positions have dur=0 from collate_fn)
             durations_to_use = target_durations
         else:
             duration_prediction = torch.exp(log_duration_prediction) - 1
-
             duration_prediction = duration_prediction * duration_control
-
             durations_to_use = torch.clamp(torch.round(duration_prediction), min=1)
+
+            # zero-out padding positions so they don't get expanded
+            if src_mask is not None:
+                durations_to_use = durations_to_use * src_mask.float()
 
         output = self.length_regulator(x, durations_to_use)
 
@@ -52,15 +54,13 @@ class VarianceAdaptor(nn.Module):
         for i in range(batch_size):
             xi = x[i]
             di = durations[i]
-            
-            # TODO: MASKING FILTER FOR PADDING
 
-            # repeat_interleave function
+            # positions with duration=0 (padding) are naturally skipped by repeat_interleave
             expanded = torch.repeat_interleave(xi, di.long(), dim=0)
 
             output.append(expanded)
 
-        # padding logic (handling batch)
+        # pad variable-length sequences into a batch
         output_tensor = torch.nn.utils.rnn.pad_sequence(output, batch_first=True)
 
         return output_tensor
@@ -147,12 +147,16 @@ class BitJETS(nn.Module):
         )
 
     def forward(self, text, target_durations=None, duration_control=1.0):
+        # mask: True = real token, False = padding (index 0 = '_' padding char)
+        src_mask = (text != 0)
+
         encoder_out = self.encoder(text)
 
         expanded_out, log_duration_preds = self.variance_adaptor(
             encoder_out,
             target_durations=target_durations,
-            duration_control=duration_control
+            duration_control=duration_control,
+            src_mask=src_mask
         )
 
         mel_output = self.decoder(expanded_out)
