@@ -1,7 +1,5 @@
 import torch
 import json
-import os
-import sys
 from models_gan import Generator
 
 class AttrDict(dict):
