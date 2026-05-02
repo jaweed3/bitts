@@ -1,0 +1,57 @@
+[project]
+name = "bitjets"
+version = "0.1.0"
+description = "BitNet 1.58-bit quantized Text-to-Speech (BitJETS)"
+requires-python = ">=3.10"
+
+dependencies = [
+    # core deep learning
+    "torch>=2.1.0",
+    "torchaudio>=2.1.0",
+
+    # audio I/O — soundfile used as torchaudio workaround on MPS
+    "soundfile>=0.12.1",
+    "librosa>=0.10.0",
+
+    # data
+    "pandas>=2.0.0",
+
+    # viz + output
+    "matplotlib>=3.7.0",
+
+    # experiment tracking (optional at runtime — graceful fallback)
+    "wandb>=0.16.0",
+
+    # config
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+# ---------------------------------------------------------------------------
+# uv: PyTorch source routing
+#   macOS (Darwin)   → PyPI torch, ships with MPS support out of the box
+#   Linux / Windows  → PyTorch CUDA 12.1 index  (RTX 4060 / Ada Lovelace)
+# ---------------------------------------------------------------------------
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu121", marker = "sys_platform != 'darwin'" },
+]
+torchaudio = [
+    { index = "pytorch-cu121", marker = "sys_platform != 'darwin'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url  = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths  = ["tests"]
+pythonpath = ["src"]       # replaces sys.path.insert in test files
