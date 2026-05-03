@@ -1,120 +1,235 @@
-# BitJETS-M4: Extreme Edge TTS with 1.58-bit Quantization
+# BitJETS — 1.58-bit Quantized Text-to-Speech
 
-[![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=flat&logo=PyTorch&logoColor=white)](https://pytorch.org/)
-[![MPS (Metal Performance Shaders)](https://img.shields.io/badge/Device-Apple%20Silicon%20(MPS)-9cf.svg?style=flat&logo=apple&logoColor=white)]()
-[![BitNet b1.58](https://img.shields.io/badge/Architecture-BitNet%20b1.58-blueviolet)]()
-[![Status](https://img.shields.io/badge/Status-Research%20Preview-yellow)]()
+Implementation of **BitTTS** ([Kawamura et al., 2024](https://arxiv.org/abs/2409.10577)) — a Text-to-Speech system where all convolutional layers use 1.58-bit ternary weights `{-1, 0, 1}`, achieving ~5× model size reduction vs FP32 with Quantization-Aware Training (QAT).
 
-> **Generative Audio on the Edge:** Implementing Microsoft's bleeding-edge [BitNet b1.58](https://arxiv.org/abs/2402.17764) architecture for Text-to-Speech, trained entirely on consumer hardware (MacBook Pro M4).
+Built on [JETS](https://arxiv.org/abs/2203.16852) architecture with [BitNet b1.58](https://arxiv.org/abs/2402.17764) quantization. Trained on LJSpeech (single speaker, 22kHz).
 
-## 📌 Abstract
+> **📝 Blog post:** [docs/blog.md](docs/blog.md) — full writeup (Indonesian/English mixed)  
+> **🎬 Demo script:** `./scripts/demo.sh` — generate showcase artifacts
 
-**BitJETS-M4** is an experimental acoustic model for Text-to-Speech (TTS) that pushes the boundaries of model compression and efficiency. By adopting the 1.58-bit quantization paradigm (where weights are constrained to ternary values $\{-1, 0, 1\}$), this project aims to enable high-quality generative audio on extreme edge devices (IoT, mobile, microcontrollers) with minimal memory footprint.
+---
 
-Unlike typical research conducted on massive GPU clusters, this model was built and trained from scratch on an **Apple Silicon M4 chip**, utilizing custom engineering solutions to overcome consumer hardware constraints.
+## Key Results
 
-## 🚀 Key Features & Achievements
+| Metric | Value |
+|---|---|
+| Acoustic model size (FP32) | ~10 MB |
+| Acoustic model size (packed, Algorithm 1) | ~2 MB |
+| BitConv1d weight precision | 1.58-bit ternary `{-1, 0, 1}` |
+| Activation precision | 8-bit int (via absmax scaling) |
+| Vocoder | HiFi-GAN (full precision, intentional) |
+| Training hardware | RTX 4060 / Apple M-series MPS |
+| Dataset | LJSpeech (13,100 utterances, ~24h) |
 
-* **Extreme Model Compression:**
-    * The acoustic model achieves a **~90% reduction** in theoretical size compared to FP32 baselines.
-    * Current unoptimized checkpoint size: **10.1 MB** (containing ~2.5M parameters in FP32 containers).
-    * Theoretical packed size (using 2-bit indexing): **< 1 MB**.
-* **Edge-Native Training Pipeline:**
-    * Trained completely on macOS using **Metal Performance Shaders (MPS)** backend.
-    * Implemented manual **Gradient Accumulation** to simulate large-batch High-Performance Computing (HPC) environments on limited VRAM.
-* **BitNet Architecture Implementation:**
-    * Custom `BitConv1d` layers built from first principles using **Straight-Through Estimators (STE)** for non-differentiable quantization backpropagation.
-    * Incorporates **RMSNorm** and optimized **Residual Connections** for stable 1-bit training dynamics.
+> See [ARCHITECTURE.md](ARCHITECTURE.md) for full technical breakdown with diagrams.
 
-## 🏗️ Architecture Overview
+---
 
-This project utilizes a hybrid approach to balance efficiency and audio quality:
-
-### 1. The Acoustic Model (BitJETS) - *1.58-bit Quantized*
-An Encoder-Decoder architecture based on JETS/Transformer principles, responsible for converting phoneme sequences into Mel-Spectrograms.
-* All major convolution and linear projection layers are replaced with custom **BitLinear/BitConv** variants.
-* Weights are dynamically quantized to $\{-1, 0, 1\}$ during the forward pass.
-* Activations are quantized to 8-bit range.
-
-### 2. The Vocoder (HiFi-GAN) - *Full Precision (FP32)*
-To ensure high-fidelity audio reconstruction, a full-precision HiFi-GAN vocoder converts the generated Mel-Spectrograms into continuous audio waveforms. Attempting to quantize the vocoder resulted in severe audio degradation, leading to this hybrid strategy.
-
-```mermaid
-graph TD;
-    A[Input Text / Phonemes] --> B(BitJETS Encoder <br> 1.58-bit);
-    B --> C{BitJETS Decoder <br> 1.58-bit};
-    C -->|Mel-Spectrogram| D[HiFi-GAN Vocoder <br> FP32];
-    D --> E(Waveform Audio Output);
-    style B fill:#f9f,stroke:#333,stroke-width:2px,color:#000
-    style C fill:#f9f,stroke:#333,stroke-width:2px,color:#000
-    style D fill:#ccf,stroke:#333,stroke-width:2px,color:#000
-
-```
-
-## 🛠️ Engineering Challenges on M4
-
-Training a generative model on a laptop presented unique challenges that required specific engineering solutions:
-
-| Challenge | Solution Implemented |
-| --- | --- |
-| **VRAM Constraints** | The M4 chip cannot handle standard batch sizes (e.g., 32 or 64) for TTS training. I implemented **Gradient Accumulation** (processing mini-batches of 8 and updating weights every 4 steps) to simulate an effective batch size of 32, stabilizing stochastic gradients. |
-| **MPS/Metal Limitations** | PyTorch's MPS backend has limitations with multi-process data loading (`num_workers > 0` often crashes). The pipeline was optimized for serial data loading without bottlenecking the GPU too severely. |
-| **BitNet Instability (Loss Explosion)** | Initial training attempts saw massive loss spikes. Debugging revealed issues with standard Residual Connections (`x * F(x)` gating vs `x + F(x)` addition) in the context of discrete weights. Switching to additive residuals and adopting **RMSNorm** over LayerNorm fixed gradient flow. |
-
-## 📊 Training Dynamics (WandB)
-
-The training process demonstrates the distinct "L-shape" convergence curve typical of BitNet architectures, where the model quickly learns the discrete weight mapping after initial instability.
-
-[MASUKKAN SCREENSHOT GRAFIK LOSS WANDB YANG BAGUS DI SINI]
-*(Figure 1: Training Loss stabilizing after fixing residual connections at step ~164k)*
-
-👉 **[View full training report on Weights & Biases](MASUKKAN LINK PUBLIC WANDB REPORT KAMU DISINI)**
-
-## 🔊 Audio Samples (Epoch 200)
-
-*Samples generated using BitJETS acoustic model + HiFi-GAN vocoder.*
-
-| Text | Audio | Notes |
-| --- | --- | --- |
-| "Burger please." | [▶️ Listen](https://www.google.com/search?q=LINK_KE_FILE_AUDIO_1.wav) | Short utterance, clear phonemes. |
-| "The quick brown fox jumps over the lazy dog." | [▶️ Listen](https://www.google.com/search?q=LINK_KE_FILE_AUDIO_2.wav) | Full alphabet test. |
-| [Kalimat Lainhttps://www.google.com/search?q=...] | [▶️ Listen](https://www.google.com/search?q=...) | https://www.google.com/search?q=... |
-
-*(Note: Slight robotic artifacts are expected due to extreme 1.58-bit quantization without final weight packing optimization.)*
-
-## 💻 Installation & Usage
-
-### Requirements
-
-* Python 3.10+
-* PyTorch (Nightly/Preview build recommended for best MPS support on macOS)
-* Torchaudio, Librosa, WandB, Matplotlib
-
-### Setup
+## Quick Start (Recommended)
 
 ```bash
-git clone [https://github.com/username/BitJETS-M4.git](https://github.com/username/BitJETS-M4.git)
-cd BitJETS-M4
-pip install -r requirements.txt
+git clone <repo>
+cd bitts
+chmod +x scripts/*.sh
 
+# One-command setup: uv + Python + CUDA deps + LJSpeech + HiFi-GAN
+./scripts/bootstrap.sh
+
+# Start training (auto-detects GPU, supports resume)
+./scripts/train.sh --resume
+
+# Inference
+./scripts/infer.sh --text "hello world"
 ```
 
-### Inference Example
+### Manual Setup (Alternative)
 
 ```bash
-python main.py infer --model_path checkpoints/bitjets_ckpt_200.pth --text "Generative AI on the edge is the future." --output result.wav
+# 1. Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# 2. Install deps (auto-selects PyTorch CUDA 12.1 on Linux)
+uv sync --no-dev
+
+# 3. LJSpeech dataset → place at:
+#    data/speech/metadata.csv
+#    data/speech/wavs/*.wav
+#    Download: https://keithito.com/LJ-Speech-Dataset/
 ```
 
-## 🔮 Future Work
+---
 
-* **Weight Packing:** Implement post-training weight indexing to pack five ternary weights into a single int8 integer, realizing the true theoretical size of < 1MB.
-* **Vocoder Quantization:** Researching methods to distill or quantize the vocoder component without destroying audio quality (e.g., using Multi-Stage Quantization).
-* **On-Device Deployment:** Exporting the model to ONNX or CoreML for real-time inference demonstration on an iPhone or ESP32 microcontroller.
+## Training
 
-## 📜 References
+```bash
+# Fresh training (auto-detects CUDA → MPS → CPU)
+python main.py train
 
-1. Wang, H., et al. (2024). "BitNet: Scaling 1-bit Transformers for Large Language Models." [arXiv:2310.11453](https://www.google.com/search?q=https://arxiv.org/abs/2310.11453)
-2. Ma, S., et al. (2024). "The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits." [arXiv:2402.17764](https://www.google.com/url?sa=E&source=gmail&q=https://arxiv.org/abs/2402.17764)
-3. Wu, Y., et al. (2024). "BitTTS: Natively Quantized Text-to-Speech against Large Language Models."
+# Resume from latest checkpoint
+python main.py train --auto-resume
 
+# Resume from specific checkpoint
+python main.py train --resume checkpoints/bitjets_ckpt_50000.pth
+
+# Offline (no WandB)
+python main.py train --auto-resume --no-wandb
+
+# Custom config
+python main.py train --device cuda --batch-size 64 --num-steps 1000000
+```
+
+### Hardware presets
+
+| Hardware | `BATCH_SIZE` | `ACCUM_STEPS` | Effective BS | Notes |
+|---|---|---|---|---|
+| RTX 4060 (8GB) | 32 | 1 | 32 | Default |
+| RTX 4060 (8GB) | 64 | 1 | 64 | Try this first |
+| Apple M-series | 8 | 4 | 32 | MPS constraints |
+| CPU (debug) | 2 | 1 | 2 | Slow, for testing |
+
+Override via CLI: `--batch-size 64 --accum-steps 1`
+
+### Checkpoints
+
+Training saves:
+- `checkpoints/latest.pth` — full state (weights + optimizer + scheduler + step), overwritten every step
+- `checkpoints/bitjets_ckpt_N.pth` — named snapshot every 10,000 steps
+- `checkpoints/bitjets_packed_N.pth` — compressed version (Algorithm 1) of named snapshots
+
+Legacy checkpoints (epoch-based, e.g. `bitjets_ckpt_180.pth`) are supported — training will resume from step 0 with loaded weights.
+
+---
+
+## Inference
+
+```bash
+# Generate audio from text
+python main.py infer \
+  --model-path checkpoints/latest.pth \
+  --text "the quick brown fox jumps over the lazy dog" \
+  --output output.wav
+
+# Adjust speaking speed
+python main.py infer --model-path checkpoints/latest.pth \
+  --text "hello world" --speed 0.8 --output slow.wav
+```
+
+---
+
+## Generate Audio Samples
+
+```bash
+# Generate 8 benchmark sentences → samples/
+python main.py sample \
+  --model-path checkpoints/latest.pth \
+  --output samples/
+
+# Output:
+# samples/01_hifigan_hello_world.wav
+# samples/02_hifigan_the_quick_brown_fox...wav
+# ...
+# samples/mel_grid.png   (visual mel comparison)
+```
+
+---
+
+## Benchmark
+
+```bash
+python main.py benchmark --model-path checkpoints/latest.pth
+```
+
+Example output:
+```
+============================================================
+  BitJETS Inference Benchmark
+============================================================
+
+--- Parameters ---
+  Total:                3,245,904
+  BitConv1d:            3,014,656  (92.9%)
+  Other (FP32):           231,248   (7.1%)
+
+--- Model Size ---
+  FP32 (baseline):    12,396.5 KB  (12.10 MB)
+  Packed (actual):     2,580.2 KB   (2.52 MB)
+  Compression:         79.2% reduction vs FP32
+
+--- Inference Latency (device: cuda) ---
+  Text length            Latency   Mel frames        RTF
+  --------------------------------------------------------
+  short  (10 chars)        3.21ms          87     0.0047x
+  medium (30 chars)        5.84ms         261     0.0046x
+  long   (60 chars)       10.22ms         522     0.0046x
+
+  RTF < 1.0 means faster than real-time.
+============================================================
+```
+
+---
+
+## Run Tests
+
+```bash
+# All tests (19 total, no LJSpeech needed)
+python -m pytest tests/ -v
+
+# Smoke tests only (training loop integration)
+python -m pytest tests/test_smoke.py -v
+
+# Fast unit tests only
+python -m pytest tests/test_layers.py tests/test_model.py -v
+```
+
+Test coverage:
+- `test_layers.py` — quantization math, weight/activation quant ranges, shapes, gradients
+- `test_model.py` — full model forward/backward, padding mask correctness, inference mode
+- `test_packing.py` — Algorithm 1 pack/unpack roundtrip, actual size reduction
+- `test_smoke.py` — training loop (50-100 steps), loss convergence, checkpoint save/resume
+
+---
+
+## Architecture Overview
+
+```
+Text → [Embedding] → [BitEncoder × 4] → [VarianceAdaptor] → [BitDecoder × 4] → [Mel] → [HiFi-GAN] → Audio
+                      1.58-bit QAT        duration align       1.58-bit QAT              FP32
+```
+
+The 1.58-bit quantization uses **Straight-Through Estimator (STE)** for gradient flow through the non-differentiable `round()` operation. Real-valued weights are maintained throughout training and rounded to `{-1, 0, 1}` only during the forward pass.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for:
+- Mermaid diagrams of every component
+- Quantization math (Eq. 4-10 from paper)
+- STE gradient flow explanation
+- Weight indexing Algorithm 1
+- Training optimization decisions
+
+---
+
+## Project Structure
+
+```
+src/
+├── layers.py       # BitConv1d, BitConvBlock — core quantization
+├── models.py       # BitJETS, BitEncoder, BitDecoder, VarianceAdaptor
+├── train.py        # Step-based training loop
+├── packing.py      # Weight indexing Algorithm 1 (base-3, L*=5)
+├── checkpoint.py   # Save/load/find checkpoint utilities
+├── dataset.py      # LJSpeechDataset
+├── inference.py    # Single inference + mel plot
+├── sample_gen.py   # Batch sample generation
+├── benchmark.py    # Latency + size benchmarks
+├── vocoder.py      # HiFi-GAN wrapper
+└── hparams.py      # All hyperparameters
+```
+
+---
+
+## References
+
+- [BitTTS: Quantized Text-to-Speech](https://arxiv.org/abs/2409.10577) — Kawamura et al., 2024
+- [BitNet b1.58](https://arxiv.org/abs/2402.17764) — Ma et al., 2024
+- [JETS](https://arxiv.org/abs/2203.16852) — Lim et al., 2022
+- [HiFi-GAN](https://arxiv.org/abs/2010.05646) — Kong et al., 2020
+- [LJSpeech Dataset](https://keithito.com/LJ-Speech-Dataset/)
