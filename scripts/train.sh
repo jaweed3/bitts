@@ -27,6 +27,7 @@ ACCUM_STEPS=""
 NUM_STEPS=""
 DEVICE="auto"
 SEED=""
+LOSSTHRESH=""
 EXTRA=()
 
 # ── Parse args ─────────────────────────────────────────────────────────────
@@ -39,6 +40,7 @@ while [[ $# -gt 0 ]]; do
         --steps)        NUM_STEPS="--num-steps $2"; shift ;;
         --device)       DEVICE="$2"; shift ;;
         --seed)         SEED="--seed $2"; shift ;;
+        --loss-threshold) LOSSTHRESH="--loss-threshold $2"; shift ;;
         --preset)
             case "$2" in
                 high)
@@ -73,6 +75,7 @@ echo "  Batch size:  ${BATCH_SIZE:-default}"
 echo "  Accum steps: ${ACCUM_STEPS:-default}"
 echo "  Steps:       ${NUM_STEPS:-default (500K)}"
 echo "  Seed:        ${SEED:-default (42)}"
+echo "  Loss thresh: ${LOSSTHRESH:-default (15)}"
 echo "=============================================="
 echo ""
 
@@ -85,4 +88,5 @@ exec uv run python main.py train \
     $ACCUM_STEPS \
     $NUM_STEPS \
     $SEED \
+    $LOSSTHRESH \
     "${EXTRA[@]}"
