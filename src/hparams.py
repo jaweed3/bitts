@@ -39,6 +39,12 @@ class HParams:
     CKPT_INTERVAL = 10_000   # save named checkpoint every N optimizer steps
     SEED = 42
 
+    # Loss gate: skip batches above this threshold to avoid gradient explosion.
+    # Set higher (25-30) when resuming legacy checkpoints with high initial loss.
+    LOSS_SKIP_THRESHOLD = 15.0
+    MAX_CONSECUTIVE_SKIPS = 200   # exit if this many batches skipped in a row
+    SKIP_GRACE_STEPS = 50         # first N optimizer steps after resume: relaxed threshold
+
     # >>> Dataset PAth <<<
     DATA_PATH = "./data/speech"
 
