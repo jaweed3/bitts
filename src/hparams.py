@@ -7,6 +7,32 @@ def _auto_device():
         return "mps"
     return "cpu"
 
+def _auto_batch_config():
+    """Returns (batch_size, accum_steps) tuned per device.
+
+    CUDA (RTX 4060 8GB) → bs=64, accum=1   (80% VRAM headroom)
+    MPS (Apple Silicon)  → bs=8,  accum=4   (shared memory, conservative)
+    CPU                   → bs=2,  accum=1   (debug only)
+    """
+    if torch.cuda.is_available():
+        # RTX 4060 / Ada Lovelace: 8 GB VRAM, bs=64 fits comfortably.
+        # For smaller GPUs (<6 GB) fall back to bs=32.
+        try:
+            vram_gb = torch.cuda.get_device_properties(0).total_mem / 1e9
+            if vram_gb >= 10:
+                return 96, 1
+            elif vram_gb >= 7:
+                return 64, 1   # RTX 4060 / 4070 sweet spot
+            else:
+                return 32, 1   # GTX 1060 / laptop GPU
+        except Exception:
+            return 32, 1
+
+    if torch.backends.mps.is_available():
+        return 8, 4            # MPS: smaller batch, accumulate to match effective bs
+
+    return 2, 1                # CPU: tiny, for smoke tests only
+
 class HParams:
     # >>> audio config <<<
     SAMPLE_RATE = 22050
@@ -28,10 +54,9 @@ class HParams:
     DROPOUT = 0.1
 
     # >>> training config <<<
-    # RTX 4060 (CUDA): BATCH_SIZE=32, ACCUM_STEPS=1
-    # Apple MPS:       BATCH_SIZE=8,  ACCUM_STEPS=4
-    BATCH_SIZE = 32
-    ACCUM_STEPS = 1          # effective batch = BATCH_SIZE * ACCUM_STEPS
+    # Auto-tuned per device (see _auto_batch_config above).
+    # Override via CLI: --batch-size N --accum-steps N
+    BATCH_SIZE, ACCUM_STEPS = _auto_batch_config()
     LEARNING_RATE = 2e-4
     NUM_STEPS = 500_000      # total optimizer steps (paper: 2000K, we target 500K)
     CHECKPOINT_DIR = "./checkpoints"
