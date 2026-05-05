@@ -66,7 +66,7 @@ def _encode_blocks(codes: torch.Tensor) -> torch.Tensor:
     blocks = codes.reshape(-1, BLOCK_SIZE)  # [num_blocks, 5]
 
     # Compute base-3 index: n = d0*81 + d1*27 + d2*9 + d3*3 + d4
-    multipliers = torch.tensor([81, 27, 9, 3, 1], dtype=torch.int32)
+    multipliers = torch.tensor([81, 27, 9, 3, 1], dtype=torch.int32, device=codes.device)
     indices = (blocks.to(torch.int32) * multipliers).sum(dim=1).to(torch.uint8)
     return indices
 
