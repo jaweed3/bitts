@@ -59,6 +59,8 @@ class HParams:
     BATCH_SIZE, ACCUM_STEPS = _auto_batch_config()
     LEARNING_RATE = 2e-4
     NUM_STEPS = 500_000      # total optimizer steps (paper: 2000K, we target 500K)
+    WARMUP_STEPS = 1000      # linear warmup before cosine decay
+    MIN_LR_RATIO = 0.1       # cosine floor: lr decays to 10% of peak (never 0)
     CHECKPOINT_DIR = "./checkpoints"
     LOG_INTERVAL = 100       # log every N optimizer steps
     CKPT_INTERVAL = 10_000   # save named checkpoint every N optimizer steps
