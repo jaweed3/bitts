@@ -248,3 +248,24 @@ echo -e "    ./scripts/infer.sh --text \"hello world\""
 echo -e ""
 echo -e "  ${BOLD}Ngopi dulu ☕, biar GPU yang kerja.${NC}"
 echo ""
+
+# ------------------------------------------------------------------
+# 9. Cleanup
+# ------------------------------------------------------------------
+step 9 "Cleaning up..."
+
+# Remove Python bytecode cache
+find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find . -type f -name "*.pyc" -delete 2>/dev/null || true
+
+# Clean uv cache (optional — uncomment if disk space is tight)
+# uv cache clean
+
+# Remove any leftover temp archives
+rm -f /tmp/LJSpeech-1.1.tar.bz2 2>/dev/null || true
+
+ok "Cleanup done"
+echo ""
+echo -e "  ${GREEN}Disk usage:${NC}"
+df -h "$PROJECT_ROOT" 2>/dev/null | tail -1 || true
+echo ""
