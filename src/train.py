@@ -159,6 +159,16 @@ def main(args=None):
     accum_count = 0
     last_loss_val = float("nan")
 
+    # Adaptive loss gate: relaxed threshold for the first N steps after resume
+    # so legacy checkpoints with moderate initial loss can break through.
+    skip_threshold = HParams.LOSS_SKIP_THRESHOLD
+    grace_threshold = HParams.LOSS_SKIP_THRESHOLD * 2.0
+    steps_since_resume = 0
+    in_grace = global_step == 0  # only apply grace when starting from step 0
+
+    consecutive_skips = 0
+    skip_diagnostics_printed = False
+
     while global_step < NUM_STEPS:
         text, mel_target, dur_target = next(data_iter)
 
@@ -179,9 +189,50 @@ def main(args=None):
         loss_dur = criterion_dur(log_dur_pred, torch.log(dur_target + 1e-4))
         loss     = loss_mel + loss_dur
 
-        if loss.item() > 15.0 or torch.isnan(loss) or torch.isinf(loss):
-            print(f"[SKIP] Loss explosion: {loss.item():.2f} @ step {global_step}")
+        effective_threshold = grace_threshold if in_grace else skip_threshold
+
+        if loss.item() > effective_threshold or torch.isnan(loss) or torch.isinf(loss):
+            if not skip_diagnostics_printed:
+                print(f"[DIAG] mel_pred  shape={list(mel_pred.shape)}  "
+                      f"mean={mel_pred.mean().item():.3f}  std={mel_pred.std().item():.3f}  "
+                      f"min={mel_pred.min().item():.3f}  max={mel_pred.max().item():.3f}")
+                print(f"[DIAG] mel_target shape={list(mel_target.shape)} "
+                      f"mean={mel_target.mean().item():.3f}  std={mel_target.std().item():.3f}  "
+                      f"min={mel_target.min().item():.3f}  max={mel_target.max().item():.3f}")
+                print(f"[DIAG] loss_mel={loss_mel.item():.3f}  loss_dur={loss_dur.item():.3f}  "
+                      f"threshold={effective_threshold:.1f}" +
+                      (" (grace period)" if in_grace else ""))
+                skip_diagnostics_printed = True
+
+            print(f"[SKIP] Loss {loss.item():.2f} > {effective_threshold:.0f} "
+                  f"@ step {global_step}  (consecutive skips: {consecutive_skips + 1})")
+            consecutive_skips += 1
+
+            if consecutive_skips >= HParams.MAX_CONSECUTIVE_SKIPS:
+                print(f"\n[FATAL] {consecutive_skips} consecutive batches skipped.")
+                print(f"  Loss stuck at ~{loss.item():.1f} (threshold: {effective_threshold:.0f}).")
+                if global_step == 0 and in_grace:
+                    print(f"  Grace period ({grace_threshold:.0f}) also failing.")
+                print(f"  Suggestions:")
+                print(f"    1. Start fresh:  ./scripts/train.sh")
+                print(f"    2. Raise threshold: edit src/hparams.py LOSS_SKIP_THRESHOLD=25")
+                print(f"    3. Verify dataset:  ls data/speech/wavs/ | wc -l")
+                print(f"  Exiting.")
+                if use_wandb:
+                    wandb.finish()
+                return
+
             continue
+
+        # Batch accepted — reset skip counter, exit grace after enough steps
+        consecutive_skips = 0
+        skip_diagnostics_printed = False
+
+        if in_grace:
+            steps_since_resume += 1
+            if steps_since_resume >= HParams.SKIP_GRACE_STEPS:
+                in_grace = False
+                print(f"[INFO] Grace period ended. Threshold now {skip_threshold:.0f}.")
 
         (loss / ACCUM_STEPS).backward()
         accum_count += 1
