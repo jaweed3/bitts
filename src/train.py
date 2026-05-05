@@ -31,20 +31,32 @@ def hparams_to_dict(cls):
 
 
 # ---------------------------------------------------------------------------
-# LR Scheduler: exponential decay per paper (gamma=0.9973)
+# LR Scheduler: cosine annealing with warmup
+#
+# Exponential decay (gamma=0.9973) decays to ~0 within 10K steps for 500K
+# training — way too aggressive. Cosine annealing sustains meaningful LR
+# throughout training and is standard in modern TTS implementations.
 # ---------------------------------------------------------------------------
 
-def build_scheduler(optimizer, warmup_steps: int):
+def build_scheduler(optimizer, warmup_steps: int, total_steps: int, min_lr_ratio: float = 0.1):
     """
-    Paper: exponential LR decay with factor 0.9973.
-    Short linear warmup added for stability when starting/resuming.
+    Linear warmup → cosine annealing to min_lr_ratio × initial LR.
+
+    Example (lr=2e-4, warmup=1000, total=500K, ratio=0.1):
+      step 0:      0
+      step 500:    1e-4   (warmup)
+      step 1000:   2e-4   (peak)
+      step 250K:   ~1.1e-4 (midpoint)
+      step 500K:   2e-5   (floor, never below)
     """
-    decay = 0.9973
 
     def lr_lambda(current_step):
         if current_step < warmup_steps:
             return float(current_step) / max(1, warmup_steps)
-        return decay ** (current_step - warmup_steps)
+        progress = (current_step - warmup_steps) / max(1, total_steps - warmup_steps)
+        progress = min(progress, 1.0)
+        cosine = 0.5 * (1 + math.cos(math.pi * progress))
+        return min_lr_ratio + (1 - min_lr_ratio) * cosine
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
@@ -124,8 +136,8 @@ def main(args=None):
     # --- Scheduler ---
     ACCUM_STEPS = getattr(args, "accum_steps", None) or HParams.ACCUM_STEPS
     NUM_STEPS   = getattr(args, "num_steps", None)   or HParams.NUM_STEPS
-    warmup_steps = min(1000, NUM_STEPS // 20)
-    scheduler = build_scheduler(optimizer, warmup_steps)
+    warmup_steps = HParams.WARMUP_STEPS
+    scheduler = build_scheduler(optimizer, warmup_steps, NUM_STEPS, HParams.MIN_LR_RATIO)
 
     # --- Resume ---
     global_step = 0
@@ -140,8 +152,15 @@ def main(args=None):
     elif args and getattr(args, "resume", None):
         resume_path = args.resume
 
+    reset_lr = args and getattr(args, "reset_lr", False)
+
     if resume_path:
         global_step = load_checkpoint(resume_path, model, optimizer, scheduler, device)
+        if reset_lr:
+            # Rebuild scheduler from scratch — useful when LR decayed to ~0
+            scheduler = build_scheduler(optimizer, warmup_steps, NUM_STEPS, HParams.MIN_LR_RATIO)
+            print(f"[reset-lr] Scheduler rebuilt. Warmup {warmup_steps}, "
+                  f"peak lr={HParams.LEARNING_RATE:.1e}, floor={HParams.LEARNING_RATE * HParams.MIN_LR_RATIO:.1e}")
 
     if use_wandb:
         wandb.watch(model, log="all", log_freq=200)
