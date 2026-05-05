@@ -36,6 +36,8 @@ def parse_args():
     parser.add_argument("--checkpoint-dir", type=str, default=None)
     parser.add_argument("--no-wandb", action="store_true",
                         help="Disable WandB logging (useful when offline)")
+    parser.add_argument("--loss-threshold", type=float, default=None,
+                        help="Max loss before skipping batch (default: 15. Lower = stricter)")
 
     # Resume
     parser.add_argument("--resume", type=str, default=None,
@@ -72,6 +74,8 @@ def update_hparams(args):
         HParams.BATCH_SIZE = args.batch_size
     if args.accum_steps:
         HParams.ACCUM_STEPS = args.accum_steps
+    if args.loss_threshold:
+        HParams.LOSS_SKIP_THRESHOLD = args.loss_threshold
     if args.checkpoint_dir:
         HParams.CHECKPOINT_DIR = args.checkpoint_dir
 
