@@ -44,6 +44,8 @@ def parse_args():
                         help="Path to checkpoint .pth to resume from")
     parser.add_argument("--auto-resume", action="store_true",
                         help="Auto-find and resume from latest checkpoint in checkpoint-dir")
+    parser.add_argument("--reset-lr", action="store_true",
+                        help="Reset scheduler on resume (use if LR decayed to ~0)")
 
     # Inference / sample
     parser.add_argument("--text", type=str, default="Hello world, this is BitNet TTS")
