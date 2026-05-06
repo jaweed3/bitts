@@ -11,10 +11,18 @@ from packing import save_packed
 
 
 def find_latest_checkpoint(ckpt_dir: str) -> str | None:
-    """Return path to the latest checkpoint in ckpt_dir, or None."""
+    """Return path to the latest checkpoint in ckpt_dir, or None.
+
+    Tries latest.pth first. If it's corrupt, falls back to named checkpoints.
+    """
     latest = os.path.join(ckpt_dir, "latest.pth")
     if os.path.exists(latest):
-        return latest
+        # Verify it's a valid checkpoint
+        try:
+            torch.load(latest, map_location="cpu", weights_only=False)
+            return latest
+        except Exception:
+            print(f"[WARN] latest.pth is corrupt — falling back to named checkpoint.")
 
     pattern = os.path.join(ckpt_dir, "bitjets_ckpt_*.pth")
     candidates = glob.glob(pattern)
@@ -30,6 +38,13 @@ def find_latest_checkpoint(ckpt_dir: str) -> str | None:
     return max(candidates, key=_step_num)
 
 
+def _atomic_save(payload: dict, path: str) -> None:
+    """Write to temp file then atomic rename — prevents corruption on Ctrl+C."""
+    tmp_path = path + ".tmp"
+    torch.save(payload, tmp_path)
+    os.replace(tmp_path, path)  # atomic on POSIX, best-effort on Windows
+
+
 def save_checkpoint(model, optimizer, scheduler, global_step: int, loss: float,
                     ckpt_dir: str, tag: str = None):
     """Save full training state (weights + optimizer + scheduler + step)."""
@@ -40,11 +55,11 @@ def save_checkpoint(model, optimizer, scheduler, global_step: int, loss: float,
         "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
         "loss": loss,
     }
-    torch.save(payload, os.path.join(ckpt_dir, "latest.pth"))
+    _atomic_save(payload, os.path.join(ckpt_dir, "latest.pth"))
 
     if tag:
         path = os.path.join(ckpt_dir, f"bitjets_ckpt_{tag}.pth")
-        torch.save(payload, path)
+        _atomic_save(payload, path)
         print(f"Checkpoint saved: {path}")
         packed_path = os.path.join(ckpt_dir, f"bitjets_packed_{tag}.pth")
         save_packed(model, packed_path)

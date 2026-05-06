@@ -178,6 +178,13 @@ def main(args=None):
     accum_count = 0
     last_loss_val = float("nan")
 
+    # --- Training health tracking ---
+    loss_ema = None        # exponential moving average
+    loss_ema_alpha = 0.05  # smoothing factor (lower = smoother)
+    loss_best = float("inf")
+    steps_since_best = 0
+    plateau_warned = False
+
     # Adaptive loss gate: relaxed threshold for the first N steps after resume
     # so legacy checkpoints with moderate initial loss can break through.
     skip_threshold = HParams.LOSS_SKIP_THRESHOLD
@@ -269,15 +276,53 @@ def main(args=None):
         last_loss_val = loss.item()
         global_step  += 1
 
+        # --- Health tracking ---
+        if loss_ema is None:
+            loss_ema = last_loss_val
+        else:
+            loss_ema = loss_ema_alpha * last_loss_val + (1 - loss_ema_alpha) * loss_ema
+
+        if last_loss_val < loss_best:
+            loss_best = last_loss_val
+            steps_since_best = 0
+        else:
+            steps_since_best += 1
+
         # --- Logging ---
         if global_step % HParams.LOG_INTERVAL == 0:
             lr_now = optimizer.param_groups[0]["lr"]
+
+            # Trend indicator
+            plateau_watch = HParams.LOG_INTERVAL * HParams.PLATEAU_PATIENCE
+            if steps_since_best >= plateau_watch * 3:
+                trend = "🔴 STUCK"
+            elif steps_since_best >= plateau_watch:
+                trend = "🟡 flat"
+            elif loss_ema < loss_best * 1.05:
+                trend = "🟢 ok"
+            else:
+                trend = "🟠 slow"
+
             print(f"Step {global_step:>7,}/{NUM_STEPS:,} | "
-                  f"loss: {last_loss_val:.4f} "
-                  f"(mel={loss_mel.item():.4f} dur={loss_dur.item():.4f}) | "
-                  f"grad: {total_norm.item():.2f} | lr: {lr_now:.2e}")
+                  f"loss: {last_loss_val:.4f} (ema={loss_ema:.4f} best={loss_best:.4f}) | "
+                  f"mel={loss_mel.item():.4f} dur={loss_dur.item():.4f} | "
+                  f"grad: {total_norm.item():.2f} | lr: {lr_now:.2e} | {trend}")
+
+            # Plateau warning
+            if steps_since_best >= plateau_watch and not plateau_warned:
+                plateau_warned = True
+                print(f"  ⚠ Plateau detected: no improvement for {steps_since_best} steps.")
+                print(f"     Best loss: {loss_best:.4f} | Current EMA: {loss_ema:.4f}")
+                if lr_now < 1e-7:
+                    print(f"     LR is very low ({lr_now:.1e}). Consider --reset-lr.")
+
+            if steps_since_best < plateau_watch:
+                plateau_warned = False
+
             _wandb_log({
                 "train_loss": last_loss_val,
+                "loss_ema":   loss_ema,
+                "loss_best":  loss_best,
                 "loss_mel":   loss_mel.item(),
                 "loss_dur":   loss_dur.item(),
                 "grad_norm":  total_norm.item(),

@@ -27,6 +27,7 @@ ACCUM_STEPS=""
 NUM_STEPS=""
 DEVICE="auto"
 SEED=""
+RESET_LR=""
 LOSSTHRESH=""
 EXTRA=()
 
@@ -35,6 +36,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --resume)       RESUME="--auto-resume" ;;
         --no-wandb)     NO_WANDB="--no-wandb" ;;
+        --reset-lr)     RESET_LR="--reset-lr" ;;
         --batch-size)   BATCH_SIZE="--batch-size $2"; shift ;;
         --accum-steps)  ACCUM_STEPS="--accum-steps $2"; shift ;;
         --steps)        NUM_STEPS="--num-steps $2"; shift ;;
@@ -88,5 +90,6 @@ exec uv run python main.py train \
     $ACCUM_STEPS \
     $NUM_STEPS \
     $SEED \
+    $RESET_LR \
     $LOSSTHRESH \
     "${EXTRA[@]}"
