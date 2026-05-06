@@ -14,39 +14,41 @@ import torch.nn.functional as F
 
 def viterbi_monotonic(log_prob: torch.Tensor) -> torch.Tensor:
     """
-    Viterbi algorithm for monotonic alignment grid.
-
-    Args:
-        log_prob: [T_text, T_mel] — log-likelihood of text_i matching mel_j.
-                  Higher = better match. Typically -L2(encoder_proj_i, mel_j).
-
-    Returns:
-        path: [T_mel] — index into text dimension (0..T_text-1) for each mel frame.
+    Viterbi algorithm for monotonic alignment grid (Optimized).
+    One loop over T_mel, vectorized over T_text.
     """
     T_text, T_mel = log_prob.shape
+    device = log_prob.device
+    dtype = log_prob.dtype
 
     # Q[i, j] = max log-prob of path ending at (i, j)
-    Q = torch.full((T_text, T_mel), -float("inf"), device=log_prob.device, dtype=log_prob.dtype)
+    Q = torch.full((T_text, T_mel), -1e9, device=device, dtype=dtype)
+    
+    # Initialize first column
     Q[0, 0] = log_prob[0, 0]
-
-    # First row: can only move right
+    
+    # Fill DP table column by column (time dimension)
+    # This is the only way to vectorize in pure PyTorch without Cython
     for j in range(1, T_mel):
-        Q[0, j] = Q[0, j - 1] + log_prob[0, j]
+        # Path can come from (i, j-1) [stay] or (i-1, j-1) [move]
+        # We can only reach text index 'i' if j >= i
+        max_i = min(j + 1, T_text)
+        
+        # stay: Q[i, j-1]
+        # move: Q[i-1, j-1]
+        prev_stay = Q[:max_i, j-1]
+        prev_move = torch.cat([torch.tensor([-1e9], device=device, dtype=dtype), Q[:max_i-1, j-1]])
+        
+        Q[:max_i, j] = torch.max(prev_stay, prev_move) + log_prob[:max_i, j]
 
-    # Fill DP table
-    for i in range(1, T_text):
-        # Diagonal start: must have at least one frame per text position
-        Q[i, i] = Q[i - 1, i - 1] + log_prob[i, i]
-        for j in range(i + 1, T_mel):
-            Q[i, j] = max(Q[i - 1, j - 1], Q[i, j - 1]) + log_prob[i, j]
-
-    # Backtrack from bottom-right
-    path = torch.zeros(T_mel, dtype=torch.long, device=log_prob.device)
+    # Backtrack (this remains a loop but it's only T_mel steps)
+    path = torch.zeros(T_mel, dtype=torch.long, device=device)
     i = T_text - 1
     for j in range(T_mel - 1, -1, -1):
         path[j] = i
-        if i > 0 and j > 0 and Q[i - 1, j - 1] >= Q[i, j - 1]:
-            i -= 1
+        if i > 0 and j > 0:
+            if Q[i - 1, j - 1] >= Q[i, j - 1]:
+                i -= 1
 
     return path
 
