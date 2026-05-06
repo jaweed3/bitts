@@ -158,13 +158,19 @@ def main(args=None):
         global_step = load_checkpoint(resume_path, model, optimizer, scheduler, device)
         if reset_lr:
             # Rebuild scheduler from scratch — useful when LR decayed to ~0
-            # BUG FIX: Reset optimizer LR to peak value before rebuilding scheduler
+            # BUG FIX: Reset optimizer LR AND clear initial_lr so scheduler picks up the new base
             for param_group in optimizer.param_groups:
                 param_group['lr'] = HParams.LEARNING_RATE
+                if 'initial_lr' in param_group:
+                    del param_group['initial_lr']
 
             scheduler = build_scheduler(optimizer, warmup_steps, NUM_STEPS, HParams.MIN_LR_RATIO)
             print(f"[reset-lr] Scheduler rebuilt. Warmup {warmup_steps}, "
                   f"peak lr={HParams.LEARNING_RATE:.1e}, floor={HParams.LEARNING_RATE * HParams.MIN_LR_RATIO:.1e}")
+            # Force an initial step to update the optimizer LR immediately
+            # otherwise it might stay at peak until the first optimizer.step()
+            scheduler.step() 
+            print(f"[reset-lr] Initial LR: {optimizer.param_groups[0]['lr']:.2e}")
 
     if use_wandb:
         wandb.watch(model, log="all", log_freq=200)
