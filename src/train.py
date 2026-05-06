@@ -232,10 +232,11 @@ def main(args=None):
         src_mask = text != 0
         encoder_out = model.encoder(text)  # [B, T_text, H]
 
-        # --- MAS alignment: replace dummy durations with real alignment ---
+        # --- MAS alignment: extract real durations from encoder↔mel match ---
         do_align = (global_step > 0 and
                     global_step % HParams.ALIGN_INTERVAL == 0 and
                     global_step < NUM_STEPS - 100)
+        do_align_loss = do_align and (global_step % HParams.ALIGN_LOSS_INTERVAL == 0)
 
         if do_align:
             with torch.no_grad():
@@ -261,7 +262,7 @@ def main(args=None):
         loss     = loss_mel + loss_dur
 
         # --- Alignment projection loss (trains the encoder→mel mapping) ---
-        if do_align:
+        if do_align_loss:
             enc_proj_train = align_proj(encoder_out)  # with gradients
             # Length-regulate the projected encoder using the MAS durations
             dur_long = dur_target.long().clamp(min=1)
@@ -376,7 +377,7 @@ def main(args=None):
             print(f"{align_tag} Step {global_step:>7,}/{NUM_STEPS:,} | "
                   f"loss: {last_loss_val:.4f} (ema={loss_ema:.4f} best={loss_best:.4f}) | "
                   f"mel={loss_mel.item():.4f} dur={loss_dur.item():.4f}" +
-                  (f" align={align_loss.item():.4f}" if do_align else "") +
+                  (f" align={align_loss.item():.4f}" if do_align_loss else "") +
                   f" | grad: {total_norm.item():.2f} | lr: {lr_now:.2e} | {trend}")
 
             # Plateau warning
