@@ -34,7 +34,15 @@ EXTRA=()
 # ── Parse args ─────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --resume)       RESUME="--auto-resume" ;;
+        --resume)
+            # If next arg looks like a path, use it; otherwise auto-resume
+            if [[ -n "${2:-}" && "$2" != --* ]]; then
+                RESUME="--resume $2"
+                shift
+            else
+                RESUME="--auto-resume"
+            fi
+            ;;
         --no-wandb)     NO_WANDB="--no-wandb" ;;
         --reset-lr)     RESET_LR="--reset-lr" ;;
         --batch-size)   BATCH_SIZE="--batch-size $2"; shift ;;
