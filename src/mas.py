@@ -73,31 +73,21 @@ def path_to_durations(path: torch.Tensor, T_text: int) -> torch.Tensor:
 
 def compute_similarity(encoder_out: torch.Tensor, mel_target: torch.Tensor) -> torch.Tensor:
     """
-    Compute L2-distance-based similarity between encoder output and mel.
-
-    Args:
-        encoder_out: [T_text, H] — encoder hidden states (after LayerNorm).
-        mel_target:  [T_mel, 80] — ground-truth mel spectrogram.
-
-    Returns:
-        log_prob: [T_text, T_mel] — higher = more similar (negative L2 distance).
+    Compute Negative L2 distance similarity (Optimized).
+    Higher = more similar (closer in Euclidean space).
     """
-    # Project encoder to mel dimension for comparison
-    # Use normalized L2 distance
-    enc_norm = F.normalize(encoder_out.float(), dim=-1)       # [T_text, H]
-    mel_norm = F.normalize(mel_target.float(), dim=-1)        # [T_mel, 80]
-
-    # If dimensions differ, project encoder to 80 via PCA-like approach
-    # or just use the raw L2 distance on encoder dim
-    if encoder_out.shape[-1] != mel_target.shape[-1]:
-        # Use cosine similarity in the shared embedding space
-        # Pad/truncate both to min dim
-        min_dim = min(encoder_out.shape[-1], mel_target.shape[-1])
-        sim = enc_norm[:, :min_dim] @ mel_norm[:, :min_dim].T  # [T_text, T_mel]
-    else:
-        sim = enc_norm @ mel_norm.T
-
-    return sim  # higher = better
+    # encoder_out: [T_text, H]
+    # mel_target:  [T_mel, 80]
+    
+    # We assume H == 80 here because it's called with projected encoder outputs.
+    # Formula: -(a^2 - 2ab + b^2)
+    a2 = torch.sum(encoder_out**2, dim=1, keepdim=True)    # [T_text, 1]
+    b2 = torch.sum(mel_target**2, dim=1, keepdim=True).T   # [1, T_mel]
+    ab = encoder_out @ mel_target.T                        # [T_text, T_mel]
+    
+    # Negative squared L2 distance
+    dist = a2 - 2 * ab + b2
+    return -0.5 * dist  # Higher is better
 
 
 def extract_durations(encoder_out: torch.Tensor, mel_target: torch.Tensor) -> torch.Tensor:
@@ -144,6 +134,7 @@ def batch_extract_durations(
     encoder_out: torch.Tensor,  # [B, T_text, H]
     mel_target: torch.Tensor,   # [B, T_mel, 80]
     text_mask: torch.Tensor,    # [B, T_text] — True = real token
+    mel_lens: torch.Tensor,     # [B] — Actual mel lengths
 ) -> torch.Tensor:
     """
     Extract durations for a batch, masking padding positions.
@@ -155,18 +146,23 @@ def batch_extract_durations(
     durations_list = []
 
     for b in range(B):
-        mask = text_mask[b]  # [T_text]
-        n_real = mask.sum().item()
-        if n_real == 0:
-            durations_list.append(torch.zeros_like(mask, dtype=torch.long))
+        t_mask = text_mask[b]  # [T_text]
+        n_text = t_mask.sum().item()
+        n_mel = mel_lens[b].item()
+        
+        if n_text == 0 or n_mel == 0:
+            durations_list.append(torch.zeros_like(t_mask, dtype=torch.long))
             continue
 
-        enc_real = encoder_out[b, mask]          # [n_real, H]
-        dur = extract_durations(enc_real, mel_target[b])  # [n_real]
+        # Slice to real lengths
+        enc_real = encoder_out[b, t_mask]          # [n_text, H]
+        mel_real = mel_target[b, :n_mel]           # [n_mel, 80]
+        
+        dur = extract_durations(enc_real, mel_real)  # [n_text]
 
         # Pad back to full text length
-        full_dur = torch.zeros(mask.shape[0], dtype=torch.long, device=dur.device)
-        full_dur[mask] = dur
+        full_dur = torch.zeros(t_mask.shape[0], dtype=torch.long, device=dur.device)
+        full_dur[t_mask] = dur
         durations_list.append(full_dur)
 
     return torch.stack(durations_list)
