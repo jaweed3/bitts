@@ -233,7 +233,8 @@ def main(args=None):
         encoder_out = model.encoder(text)  # [B, T_text, H]
 
         # --- MAS alignment: extract real durations from encoder↔mel match ---
-        do_align = (global_step > 0 and
+        # Only after warmup — encoder needs time to learn basic phoneme representations.
+        do_align = (global_step >= HParams.MAS_START_STEP and
                     global_step % HParams.ALIGN_INTERVAL == 0 and
                     global_step < NUM_STEPS - 100)
         do_align_loss = do_align and (global_step % HParams.ALIGN_LOSS_INTERVAL == 0)
