@@ -158,6 +158,10 @@ def main(args=None):
         global_step = load_checkpoint(resume_path, model, optimizer, scheduler, device)
         if reset_lr:
             # Rebuild scheduler from scratch — useful when LR decayed to ~0
+            # BUG FIX: Reset optimizer LR to peak value before rebuilding scheduler
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = HParams.LEARNING_RATE
+
             scheduler = build_scheduler(optimizer, warmup_steps, NUM_STEPS, HParams.MIN_LR_RATIO)
             print(f"[reset-lr] Scheduler rebuilt. Warmup {warmup_steps}, "
                   f"peak lr={HParams.LEARNING_RATE:.1e}, floor={HParams.LEARNING_RATE * HParams.MIN_LR_RATIO:.1e}")
