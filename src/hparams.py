@@ -73,7 +73,7 @@ class HParams:
     SKIP_GRACE_STEPS = 50         # first N optimizer steps after resume: relaxed threshold
     PLATEAU_PATIENCE = 10         # warn if no improvement for N × LOG_INTERVAL steps
     MAS_START_STEP = 1000           # delay MAS until encoder has basic training
-    ALIGN_INTERVAL = 1              # run MAS duration extraction every N steps (1 = every step)
+    ALIGN_INTERVAL = 10              # run MAS duration extraction every N steps (1 = every step)
     ALIGN_LOSS_INTERVAL = 100       # train alignment projector every N steps (sparser = faster)
 
     # >>> Dataset PAth <<<
