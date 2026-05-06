@@ -89,7 +89,7 @@ class BitEncoder(nn.Module):
         for layer in self.layer:
             residual = x
             out = layer(x)
-            out = torch.relu(out)
+            out = F.leaky_relu(out, 0.1)
             x = out + residual
         x = self.final_norm(x)
         return x
@@ -119,7 +119,7 @@ class BitDecoder(nn.Module):
         for layer in self.layers:
             residual = x
             out = layer(x)
-            out = torch.relu(out)
+            out = F.leaky_relu(out, 0.1)
             x = out + residual
 
         x = self.final_form(x)
