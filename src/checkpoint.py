@@ -46,7 +46,7 @@ def _atomic_save(payload: dict, path: str) -> None:
 
 
 def save_checkpoint(model, optimizer, scheduler, global_step: int, loss: float,
-                    ckpt_dir: str, tag: str = None):
+                    ckpt_dir: str, tag: str = None, extra_state: dict = None):
     """Save full training state (weights + optimizer + scheduler + step)."""
     payload = {
         "global_step": global_step,
@@ -55,6 +55,9 @@ def save_checkpoint(model, optimizer, scheduler, global_step: int, loss: float,
         "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
         "loss": loss,
     }
+    if extra_state:
+        payload["extra_state"] = extra_state
+
     _atomic_save(payload, os.path.join(ckpt_dir, "latest.pth"))
 
     if tag:
@@ -66,7 +69,7 @@ def save_checkpoint(model, optimizer, scheduler, global_step: int, loss: float,
 
 
 def load_checkpoint(path: str, model, optimizer, scheduler, device: str) -> int:
-    """Load full training state. Returns global_step to resume from."""
+    """Load full training state. Returns (global_step, extra_state dict or None)."""
     print(f"Loading checkpoint: {path}")
     ckpt = torch.load(path, map_location=device, weights_only=False)
 
@@ -95,4 +98,9 @@ def load_checkpoint(path: str, model, optimizer, scheduler, device: str) -> int:
         print(f"Legacy checkpoint (epoch {epoch}). Step counter reset to 0.")
     else:
         print(f"Resuming from step {step:,}.")
-    return step
+
+    extra_state = ckpt.get("extra_state", None)
+    if extra_state:
+        print("Extra state restored (alignment projector, etc.).")
+
+    return step, extra_state

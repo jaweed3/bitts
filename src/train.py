@@ -3,6 +3,7 @@ import random
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
@@ -10,6 +11,7 @@ from hparams import HParams
 from dataset import LJSpeechDataset, collate_fn
 from models import BitJETS
 from checkpoint import find_latest_checkpoint, save_checkpoint, load_checkpoint
+from mas import batch_extract_durations
 
 # ---------------------------------------------------------------------------
 # WandB — optional, degrades gracefully if offline or not installed
@@ -125,9 +127,14 @@ def main(args=None):
         out_mel_dim=HParams.N_MELS,
     ).to(device)
 
-    # --- Optimizer ---
+    # --- Alignment head: projects encoder output → mel space for MAS ---
+    # This small Linear layer learns what the encoder output "sounds like"
+    # so MAS can find the right text↔mel alignment.
+    align_proj = nn.Linear(HParams.ENCODER_DIM, HParams.N_MELS).to(device)
+
+    # --- Optimizer (includes alignment head) ---
     optimizer = optim.AdamW(
-        model.parameters(),
+        list(model.parameters()) + list(align_proj.parameters()),
         lr=HParams.LEARNING_RATE,
         betas=(0.8, 0.99),
         weight_decay=0.0,
@@ -155,7 +162,13 @@ def main(args=None):
     reset_lr = args and getattr(args, "reset_lr", False)
 
     if resume_path:
-        global_step = load_checkpoint(resume_path, model, optimizer, scheduler, device)
+        global_step, extra_state = load_checkpoint(resume_path, model, optimizer, scheduler, device)
+        if extra_state and "align_proj" in extra_state:
+            try:
+                align_proj.load_state_dict(extra_state["align_proj"])
+                print("Alignment projector restored.")
+            except Exception as e:
+                print(f"Could not restore align_proj: {e}. Fresh projector.")
         if reset_lr:
             # Rebuild scheduler from scratch — useful when LR decayed to ~0
             # BUG FIX: Reset optimizer LR AND clear initial_lr so scheduler picks up the new base
@@ -176,7 +189,7 @@ def main(args=None):
         wandb.watch(model, log="all", log_freq=200)
 
     # --- Loss ---
-    criterion_mel = nn.MSELoss()
+    criterion_mel = nn.L1Loss()   # L1 is more robust to alignment shifts than MSE
     criterion_dur = nn.MSELoss()
 
     eff_batch = HParams.BATCH_SIZE * ACCUM_STEPS
@@ -215,15 +228,61 @@ def main(args=None):
         if text.max() >= HParams.VOCAB_SIZE:
             continue
 
-        mel_pred, log_dur_pred = model(text, target_durations=dur_target)
+        # --- Encoder (shared) ---
+        src_mask = text != 0
+        encoder_out = model.encoder(text)  # [B, T_text, H]
 
+        # --- MAS alignment: replace dummy durations with real alignment ---
+        do_align = (global_step > 0 and
+                    global_step % HParams.ALIGN_INTERVAL == 0 and
+                    global_step < NUM_STEPS - 100)
+
+        if do_align:
+            with torch.no_grad():
+                enc_proj = align_proj(encoder_out.detach())
+                dur_target = batch_extract_durations(
+                    enc_proj, mel_target, src_mask
+                ).to(device)
+
+        # --- Variance adaptor + decoder ---
+        expanded_out, log_dur_pred = model.variance_adaptor(
+            encoder_out, target_durations=dur_target, src_mask=src_mask
+        )
+        mel_pred = model.decoder(expanded_out)
+
+        # --- Trim to matching length ---
         min_len    = min(mel_pred.shape[1], mel_target.shape[1])
         mel_pred   = mel_pred[:, :min_len, :]
-        mel_target = mel_target[:, :min_len, :]
+        mel_target_trimmed = mel_target[:, :min_len, :]
 
-        loss_mel = criterion_mel(mel_pred, mel_target)
-        loss_dur = criterion_dur(log_dur_pred, torch.log(dur_target + 1e-4))
+        # --- Losses: L1 for mel (robust to alignment noise) ---
+        loss_mel = criterion_mel(mel_pred, mel_target_trimmed)
+        loss_dur = criterion_dur(log_dur_pred, torch.log(dur_target.float() + 1e-4))
         loss     = loss_mel + loss_dur
+
+        # --- Alignment projection loss (trains the encoder→mel mapping) ---
+        if do_align:
+            enc_proj_train = align_proj(encoder_out)  # with gradients
+            # Length-regulate the projected encoder using the MAS durations
+            dur_long = dur_target.long().clamp(min=1)
+            enc_aligned_list = []
+            for b in range(encoder_out.shape[0]):
+                ea = torch.repeat_interleave(
+                    enc_proj_train[b], dur_long[b], dim=0
+                )  # [T_mel_est, 80]
+                enc_aligned_list.append(ea)
+            # Pad to same length
+            enc_aligned = torch.nn.utils.rnn.pad_sequence(
+                enc_aligned_list, batch_first=True
+            )  # [B, max_T, 80]
+            min_align = min(enc_aligned.shape[1], mel_target_trimmed.shape[1])
+            align_loss = F.l1_loss(
+                enc_aligned[:, :min_align, :],
+                mel_target_trimmed[:, :min_align, :]
+            )
+            loss = loss + 0.3 * align_loss
+        else:
+            align_loss = torch.tensor(0.0)
 
         effective_threshold = grace_threshold if in_grace else skip_threshold
 
@@ -313,10 +372,12 @@ def main(args=None):
             else:
                 trend = "🟠 slow"
 
-            print(f"Step {global_step:>7,}/{NUM_STEPS:,} | "
+            align_tag = "[MAS]" if do_align else "     "
+            print(f"{align_tag} Step {global_step:>7,}/{NUM_STEPS:,} | "
                   f"loss: {last_loss_val:.4f} (ema={loss_ema:.4f} best={loss_best:.4f}) | "
-                  f"mel={loss_mel.item():.4f} dur={loss_dur.item():.4f} | "
-                  f"grad: {total_norm.item():.2f} | lr: {lr_now:.2e} | {trend}")
+                  f"mel={loss_mel.item():.4f} dur={loss_dur.item():.4f}" +
+                  (f" align={align_loss.item():.4f}" if do_align else "") +
+                  f" | grad: {total_norm.item():.2f} | lr: {lr_now:.2e} | {trend}")
 
             # Plateau warning
             if steps_since_best >= plateau_watch and not plateau_warned:
@@ -342,10 +403,11 @@ def main(args=None):
 
         # --- Checkpoint: latest every step (overwrite), named every CKPT_INTERVAL ---
         save_checkpoint(model, optimizer, scheduler, global_step, last_loss_val,
-                        HParams.CHECKPOINT_DIR)
+                        HParams.CHECKPOINT_DIR, extra_state={"align_proj": align_proj.state_dict()})
         if global_step % HParams.CKPT_INTERVAL == 0:
             save_checkpoint(model, optimizer, scheduler, global_step, last_loss_val,
-                            HParams.CHECKPOINT_DIR, tag=str(global_step))
+                            HParams.CHECKPOINT_DIR, tag=str(global_step),
+                            extra_state={"align_proj": align_proj.state_dict()})
 
     print(f"Training complete at step {global_step:,}.")
     if use_wandb:

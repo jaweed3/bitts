@@ -72,6 +72,7 @@ class HParams:
     MAX_CONSECUTIVE_SKIPS = 200   # exit if this many batches skipped in a row
     SKIP_GRACE_STEPS = 50         # first N optimizer steps after resume: relaxed threshold
     PLATEAU_PATIENCE = 10         # warn if no improvement for N × LOG_INTERVAL steps
+    ALIGN_INTERVAL = 2000          # run MAS duration extraction every N steps
 
     # >>> Dataset PAth <<<
     DATA_PATH = "./data/speech"
