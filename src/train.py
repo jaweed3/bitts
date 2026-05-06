@@ -233,7 +233,13 @@ def main(args=None):
         encoder_out = model.encoder(text)  # [B, T_text, H]
 
         # --- MAS alignment: extract real durations from encoder↔mel match ---
-        # Only after warmup — encoder needs time to learn basic phoneme representations.
+        # Calculate actual mel lengths (ignoring padding)
+        # We know padding value is -11.5 (from dataset.py)
+        with torch.no_grad():
+            # [B, T_mel] -> sum over mel dim to find non-padding frames
+            mel_masks = (mel_target != -11.5).any(dim=-1)
+            mel_lens = mel_masks.sum(dim=-1).int()
+
         do_align = (global_step >= HParams.MAS_START_STEP and
                     global_step % HParams.ALIGN_INTERVAL == 0 and
                     global_step < NUM_STEPS - 100)
@@ -242,8 +248,9 @@ def main(args=None):
         if do_align:
             with torch.no_grad():
                 enc_proj = align_proj(encoder_out.detach())
+                # Pass mel_lens to MAS so it ignores padding
                 dur_target = batch_extract_durations(
-                    enc_proj, mel_target, src_mask
+                    enc_proj, mel_target, src_mask, mel_lens
                 ).to(device)
 
         # --- Variance adaptor + decoder ---
